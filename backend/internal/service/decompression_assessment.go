@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -151,4 +152,65 @@ func (s *DecompressionAssessmentService) Compare(ctx context.Context, leftID, ri
 			"Differences describe deterministic training assumptions, not relative dive safety.",
 		}, Disclaimer: dto.SafetyDisclaimer,
 	}, nil
+}
+
+func (s *DecompressionAssessmentService) ListSensitivityChecks(ctx context.Context, assessmentID uint, page, size int) ([]dto.SensitivityCheckResponse, int64, error) {
+	items, total, err := s.assessments.ListSensitivityChecks(ctx, assessmentID, page, size)
+	if err != nil {
+		return nil, 0, err
+	}
+	responses := make([]dto.SensitivityCheckResponse, 0, len(items))
+	for _, item := range items {
+		response, decodeErr := dto.DecodeSensitivityCheck(item)
+		if decodeErr != nil {
+			return nil, 0, decodeErr
+		}
+		responses = append(responses, response)
+	}
+	return responses, total, nil
+}
+
+func (s *DecompressionAssessmentService) GetSensitivityCheck(ctx context.Context, id uint) (dto.SensitivityCheckResponse, error) {
+	item, err := s.assessments.GetSensitivityCheck(ctx, id)
+	if err != nil {
+		return dto.SensitivityCheckResponse{}, err
+	}
+	return dto.DecodeSensitivityCheck(item)
+}
+
+// RunSensitivityCheck replays the stored immutable snapshot; it neither mutates
+// the assessment nor the dive plan. Each invocation is persisted as its own
+// append-only archive entry, including perturbations that leave model bounds.
+func (s *DecompressionAssessmentService) RunSensitivityCheck(ctx context.Context, assessmentID uint, actor audit.Entry) (dto.SensitivityCheckResponse, error) {
+	assessment, err := s.assessments.Get(ctx, assessmentID)
+	if err != nil {
+		return dto.SensitivityCheckResponse{}, err
+	}
+	response, decodeErr := dto.DecodeAssessment(assessment)
+	if decodeErr != nil {
+		return dto.SensitivityCheckResponse{}, util.Internal(decodeErr)
+	}
+	outcome, runErr := decompression.RunSensitivityCheck(response.InputSnapshot, s.maxSegments)
+	if runErr != nil {
+		return dto.SensitivityCheckResponse{}, util.Unprocessable("MODEL_INPUT_INVALID", runErr.Error(), runErr)
+	}
+	encoded, marshalErr := json.Marshal(outcome.Variants)
+	if marshalErr != nil {
+		return dto.SensitivityCheckResponse{}, util.Internal(marshalErr)
+	}
+	item := model.SensitivityCheck{
+		AssessmentID: assessmentID, AlgorithmVersion: outcome.AlgorithmVersion,
+		PerturbationPercent: outcome.PerturbationPct, BaselineScore: outcome.BaselineScore,
+		BaselineRiskBand: outcome.BaselineRiskBand, MostInfluentialSequence: outcome.MostInfluentialSequence,
+		MostInfluentialReason: outcome.MostInfluentialReason, OutRangeCount: outcome.OutRangeCount,
+		BandChangeCount: outcome.BandChangeCount, VariantsJSON: string(encoded), CreatedBy: actor.ActorID,
+	}
+	actor.Action = "sensitivity_check.run"
+	actor.EntityType = "sensitivity_check"
+	actor.BeforeSummary = fmt.Sprintf("assessment=%d baseline_score=%.2f baseline_band=%s immutable_snapshot=true", assessmentID, outcome.BaselineScore, outcome.BaselineRiskBand)
+	actor.AfterSummary = fmt.Sprintf("perturbations=%d out_of_model_range=%d band_changes=%d most_influential_segment=%d", len(outcome.Variants), outcome.OutRangeCount, outcome.BandChangeCount, outcome.MostInfluentialSequence)
+	if err := s.assessments.CreateSensitivityCheck(ctx, assessmentID, &item, actor); err != nil {
+		return dto.SensitivityCheckResponse{}, err
+	}
+	return dto.DecodeSensitivityCheck(item)
 }

@@ -128,3 +128,45 @@ func (h *DecompressionAssessmentHandler) Compare(c *gin.Context) {
 	}
 	util.OK(c, comparison)
 }
+
+func (h *DecompressionAssessmentHandler) ListSensitivityChecks(c *gin.Context) {
+	id, ok := util.ParamID(c)
+	if !ok {
+		return
+	}
+	page, size := util.QueryPage(c)
+	items, total, err := h.service.ListSensitivityChecks(c.Request.Context(), id, page, size)
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.OK(c, util.Page{Items: items, Total: total, Page: page, Size: size})
+}
+
+func (h *DecompressionAssessmentHandler) RunSensitivityCheck(c *gin.Context) {
+	id, ok := util.ParamID(c)
+	if !ok {
+		return
+	}
+	item, err := h.service.RunSensitivityCheck(c.Request.Context(), id, auditActor(c))
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.Created(c, item)
+}
+
+func (h *DecompressionAssessmentHandler) GetSensitivityCheck(c *gin.Context) {
+	raw := c.Param("check_id")
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || value == 0 {
+		util.Fail(c, util.BadRequest("INVALID_ID", "path check_id must be a positive integer", err))
+		return
+	}
+	item, err := h.service.GetSensitivityCheck(c.Request.Context(), uint(value))
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.OK(c, item)
+}

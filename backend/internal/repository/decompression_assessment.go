@@ -124,3 +124,55 @@ func (r *DecompressionAssessmentRepository) Transition(ctx context.Context, plan
 	}
 	return nil
 }
+
+func (r *DecompressionAssessmentRepository) ListSensitivityChecks(ctx context.Context, assessmentID uint, page, size int) ([]model.SensitivityCheck, int64, error) {
+	query := r.db.WithContext(ctx).Model(&model.SensitivityCheck{})
+	if assessmentID > 0 {
+		query = query.Where("assessment_id = ?", assessmentID)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count sensitivity checks: %w", err)
+	}
+	var items []model.SensitivityCheck
+	if err := query.Order("created_at DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&items).Error; err != nil {
+		return nil, 0, fmt.Errorf("list sensitivity checks: %w", err)
+	}
+	return items, total, nil
+}
+
+func (r *DecompressionAssessmentRepository) GetSensitivityCheck(ctx context.Context, id uint) (model.SensitivityCheck, error) {
+	var item model.SensitivityCheck
+	if err := r.db.WithContext(ctx).First(&item, id).Error; err != nil {
+		return model.SensitivityCheck{}, fmt.Errorf("get sensitivity check %d: %w", id, err)
+	}
+	return item, nil
+}
+
+// CreateSensitivityCheck appends an independent archive; the original immutable
+// assessment, its snapshot, and the dive plan version are never modified.
+func (r *DecompressionAssessmentRepository) CreateSensitivityCheck(ctx context.Context, assessmentID uint, item *model.SensitivityCheck, entry audit.Entry) error {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.DecompressionAssessment{}).Where("id = ?", assessmentID).Count(&count).Error; err != nil {
+			return fmt.Errorf("verify assessment for sensitivity check: %w", err)
+		}
+		if count != 1 {
+			return util.NotFound(fmt.Sprintf("assessment %d", assessmentID))
+		}
+		var latest int
+		if err := tx.Model(&model.SensitivityCheck{}).Where("assessment_id = ?", assessmentID).Select("COALESCE(MAX(run_serial), 0)").Scan(&latest).Error; err != nil {
+			return fmt.Errorf("allocate sensitivity run serial: %w", err)
+		}
+		item.RunSerial = latest + 1
+		if err := tx.Create(item).Error; err != nil {
+			return fmt.Errorf("create sensitivity check: %w", err)
+		}
+		entry.EntityID = item.ID
+		return r.audit.RecordWithDB(ctx, tx, entry)
+	})
+	if err != nil {
+		return fmt.Errorf("create sensitivity check transaction: %w", err)
+	}
+	return nil
+}

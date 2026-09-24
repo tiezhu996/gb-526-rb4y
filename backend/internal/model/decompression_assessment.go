@@ -22,3 +22,22 @@ type DecompressionAssessment struct {
 }
 
 func (DecompressionAssessment) TableName() string { return "decompression_assessments" }
+
+type SensitivityCheck struct {
+	ID                      uint               `gorm:"primaryKey" json:"id"`
+	AssessmentID            uint               `gorm:"not null;uniqueIndex:idx_sensitivity_run" json:"assessment_id"`
+	RunSerial               int                `gorm:"not null;uniqueIndex:idx_sensitivity_run" json:"run_serial"`
+	AlgorithmVersion        string             `gorm:"size:48;not null;index" json:"algorithm_version"`
+	PerturbationPercent     float64            `gorm:"not null" json:"perturbation_percent"`
+	BaselineScore           float64            `gorm:"not null" json:"baseline_score"`
+	BaselineRiskBand        constants.RiskBand `gorm:"size:20;not null;check:baseline_risk_band IN ('informational','caution','elevated','invalid')" json:"baseline_risk_band"`
+	MostInfluentialSequence int                `gorm:"not null;default:0" json:"most_influential_sequence"`
+	MostInfluentialReason   string             `gorm:"size:240;not null;default:''" json:"most_influential_reason"`
+	OutRangeCount           int                `gorm:"not null;default:0" json:"out_range_count"`
+	BandChangeCount         int                `gorm:"not null;default:0" json:"band_change_count"`
+	VariantsJSON            string             `gorm:"type:text;not null" json:"variants_json"`
+	CreatedBy               uint               `gorm:"not null;index" json:"created_by"`
+	CreatedAt               time.Time          `gorm:"not null;index" json:"created_at"`
+}
+
+func (SensitivityCheck) TableName() string { return "sensitivity_checks" }

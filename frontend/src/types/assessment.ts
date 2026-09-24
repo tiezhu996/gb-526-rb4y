@@ -64,3 +64,45 @@ export interface AssessmentComparison {
   summary: string[]
   disclaimer: string
 }
+
+export type SensitivityDimension = 'depth' | 'duration'
+export type SensitivityDirection = 'minus_10_percent' | 'plus_10_percent'
+export type SensitivityVariantStatus = 'computed' | 'out_of_model_range'
+
+export interface SensitivityVariant {
+  sequence_no: number
+  segment_type: string
+  dimension: SensitivityDimension
+  direction: SensitivityDirection
+  perturbation_percent: number
+  original_depth_m: number
+  perturbed_depth_m?: number
+  original_duration_min: number
+  perturbed_duration_min?: number
+  status: SensitivityVariantStatus
+  comparative_score?: number
+  score_delta: number
+  highest_risk_band?: RiskBand
+  baseline_risk_band: RiskBand
+  risk_band_changed: boolean
+  risk_flag_codes?: string[]
+  out_of_range_reason?: string
+}
+
+export interface SensitivityCheck {
+  id: number
+  assessment_id: number
+  run_serial: number
+  algorithm_version: string
+  perturbation_percent: number
+  baseline_score: number
+  baseline_risk_band: RiskBand
+  most_influential_sequence: number
+  most_influential_reason: string
+  out_range_count: number
+  band_change_count: number
+  variants: SensitivityVariant[]
+  created_by: number
+  created_at: string
+  safety_disclaimer: string
+}

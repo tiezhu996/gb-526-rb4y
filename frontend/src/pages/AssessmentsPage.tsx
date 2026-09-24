@@ -4,6 +4,7 @@ import { ArrowRight, CheckCheck, GitCompareArrows, ShieldAlert, Send } from 'luc
 import { AssumptionPanel } from '@/components/common/AssumptionPanel'
 import { PageHeader } from '@/components/common/PageHeader'
 import { PlanStatusBadge } from '@/components/common/PlanStatusBadge'
+import { SensitivityPanel } from '@/components/common/SensitivityPanel'
 import { getPlan } from '@/api/plan'
 import { useAuth } from '@/hooks/useAuth'
 import { useAssessmentPolling } from '@/hooks/useAssessmentPolling'
@@ -53,7 +54,8 @@ export function AssessmentsPage() {
             <div className="compartment-grid">{selected.compartment_loads.map((curve) => { const last = curve.points.at(-1); return <div key={curve.name}><span>{curve.name}</span><strong>{last?.total_inert_bar.toFixed(3)} bar</strong><small>N2 t½ {curve.n2_half_time_min} · He t½ {curve.he_half_time_min}</small></div> })}</div>
             <AssumptionPanel assumptions={selected.assumptions} />
             <section className="compare-panel"><div className="section-title"><GitCompareArrows size={18} /><div><strong>Compare immutable runs</strong><span>Difference is descriptive, not relative safety</span></div></div><TextField select label="Other assessment" value={compareId || ''} onChange={(event) => setCompareId(Number(event.target.value))} sx={{ minWidth: 220 }}>{assessments.items.filter((item) => item.id !== selected.id).map((item) => <MenuItem key={item.id} value={item.id}>#{item.id} · index {item.comparative_score.toFixed(1)}</MenuItem>)}</TextField><Button startIcon={<ArrowRight size={16} />} disabled={!compareId} onClick={() => void assessments.compare(selected.id, compareId)}>Compare</Button>{assessments.comparison && <div className="comparison-result"><strong>{assessments.comparison.score_delta >= 0 ? '+' : ''}{assessments.comparison.score_delta.toFixed(2)} index</strong><span>{assessments.comparison.flag_delta >= 0 ? '+' : ''}{assessments.comparison.flag_delta} flags</span><p>{assessments.comparison.summary.join(' ')}</p></div>}</section>
-            <p className="disclaimer-line">{selected.safety_disclaimer}</p>
+            <SensitivityPanel assessmentId={selected.id} canRun={isPlanner} />
+<p className="disclaimer-line">{selected.safety_disclaimer}</p>
           </> : <div className="empty-state">Select an assessment to inspect its immutable evidence.</div>}
         </section>
       </div>

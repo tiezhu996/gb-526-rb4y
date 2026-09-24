@@ -39,6 +39,44 @@ type AssessmentComparison struct {
 	Disclaimer string             `json:"disclaimer"`
 }
 
+type SensitivityVariantResponse = decompression.SensitivityVariant
+
+type SensitivityCheckResponse struct {
+	ID                      uint                         `json:"id"`
+	AssessmentID            uint                         `json:"assessment_id"`
+	RunSerial               int                          `json:"run_serial"`
+	AlgorithmVersion        string                       `json:"algorithm_version"`
+	PerturbationPercent     float64                      `json:"perturbation_percent"`
+	BaselineScore           float64                      `json:"baseline_score"`
+	BaselineRiskBand        constants.RiskBand           `json:"baseline_risk_band"`
+	MostInfluentialSequence int                          `json:"most_influential_sequence"`
+	MostInfluentialReason   string                       `json:"most_influential_reason"`
+	OutRangeCount           int                          `json:"out_range_count"`
+	BandChangeCount         int                          `json:"band_change_count"`
+	Variants                []SensitivityVariantResponse `json:"variants"`
+	CreatedBy               uint                         `json:"created_by"`
+	CreatedAt               time.Time                    `json:"created_at"`
+	SafetyDisclaimer        string                       `json:"safety_disclaimer"`
+}
+
+func DecodeSensitivityCheck(item model.SensitivityCheck) (SensitivityCheckResponse, error) {
+	response := SensitivityCheckResponse{
+		ID: item.ID, AssessmentID: item.AssessmentID, RunSerial: item.RunSerial,
+		AlgorithmVersion: item.AlgorithmVersion, PerturbationPercent: item.PerturbationPercent,
+		BaselineScore: item.BaselineScore, BaselineRiskBand: item.BaselineRiskBand,
+		MostInfluentialSequence: item.MostInfluentialSequence, MostInfluentialReason: item.MostInfluentialReason,
+		OutRangeCount: item.OutRangeCount, BandChangeCount: item.BandChangeCount,
+		CreatedBy: item.CreatedBy, CreatedAt: item.CreatedAt, SafetyDisclaimer: SafetyDisclaimer,
+	}
+	if err := json.Unmarshal([]byte(item.VariantsJSON), &response.Variants); err != nil {
+		return SensitivityCheckResponse{}, fmt.Errorf("decode sensitivity check %d variants: %w", item.ID, err)
+	}
+	if response.Variants == nil {
+		response.Variants = []SensitivityVariantResponse{}
+	}
+	return response, nil
+}
+
 const SafetyDisclaimer = "Training and decision support only. This result is not medical advice, a certified dive table, a safety clearance, or an executable decompression instruction. Human supervisor review is required."
 
 func DecodeAssessment(item model.DecompressionAssessment) (AssessmentResponse, error) {

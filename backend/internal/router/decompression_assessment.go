@@ -11,6 +11,9 @@ func RegisterDecompressionAssessmentRoutes(api *gin.RouterGroup, h *handler.Deco
 	assessments.GET("", h.List)
 	assessments.GET("/:id", h.Get)
 	assessments.GET("/:id/compare", h.Compare)
+	assessments.GET("/:id/sensitivity-checks", h.ListSensitivityChecks)
+	assessments.POST("/:id/sensitivity-checks", write, h.RunSensitivityCheck)
+	assessments.GET("/sensitivity-checks/:check_id", h.GetSensitivityCheck)
 	assessments.POST("/:id/submit", write, h.Submit)
 	assessments.POST("/:id/approve", review, h.Approve)
 }
