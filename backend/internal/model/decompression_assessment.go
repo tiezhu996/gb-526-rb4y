@@ -22,3 +22,27 @@ type DecompressionAssessment struct {
 }
 
 func (DecompressionAssessment) TableName() string { return "decompression_assessments" }
+
+// SensitivityCheck is an independently archived replay of one immutable
+// assessment snapshot. It never mutates the parent assessment or plan.
+type SensitivityCheck struct {
+	ID                     uint               `gorm:"primaryKey" json:"id"`
+	AssessmentID           uint               `gorm:"not null;index" json:"assessment_id"`
+	PlanID                 uint               `gorm:"not null;index" json:"plan_id"`
+	AlgorithmVersion       string             `gorm:"size:48;not null;index" json:"algorithm_version"`
+	AdjustmentRatio        float64            `gorm:"not null" json:"adjustment_ratio"`
+	BaselineScore          float64            `gorm:"not null" json:"baseline_comparative_score"`
+	BaselineRiskBand       constants.RiskBand `gorm:"size:20;not null;check:baseline_risk_band IN ('informational','caution','elevated','invalid')" json:"baseline_risk_band"`
+	TotalVariants          int                `gorm:"not null;default:0" json:"total_variants"`
+	ComputableVariants     int                `gorm:"not null;default:0" json:"computable_variants"`
+	OutOfRangeVariants     int                `gorm:"not null;default:0" json:"out_of_range_variants"`
+	MostAffectedSequenceNo int                `gorm:"not null;default:0" json:"most_affected_sequence_no"`
+	MostAffectedAxis       string             `gorm:"size:16;not null;default:''" json:"most_affected_axis"`
+	MostAffectedDirection  string             `gorm:"size:16;not null;default:''" json:"most_affected_direction"`
+	ReportJSON             string             `gorm:"type:text;not null" json:"report_json"`
+	CreatedBy              uint               `gorm:"not null;index" json:"created_by"`
+	CreatedByUsername      string             `gorm:"size:64;not null;default:''" json:"created_by_username"`
+	CreatedAt              time.Time          `gorm:"not null;index" json:"created_at"`
+}
+
+func (SensitivityCheck) TableName() string { return "sensitivity_checks" }

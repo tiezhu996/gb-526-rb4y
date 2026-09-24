@@ -138,11 +138,33 @@ func ComparativeScore(flags []RiskFlag, curves []CompartmentCurve) float64 {
 
 func HighestRiskBand(flags []RiskFlag) constants.RiskBand {
 	highest := constants.RiskInformational
-	rank := map[constants.RiskBand]int{constants.RiskInformational: 0, constants.RiskCaution: 1, constants.RiskElevated: 2, constants.RiskInvalid: 3}
 	for _, flag := range flags {
-		if rank[flag.Band] > rank[highest] {
+		if RiskBandRank(flag.Band) > RiskBandRank(highest) {
 			highest = flag.Band
 		}
 	}
 	return highest
+}
+
+// RiskBandRank orders bands so sensitivity runs can express band movement as a
+// single signed delta: informational=0, caution=1, elevated=2, invalid=3.
+func RiskBandRank(band constants.RiskBand) int {
+	switch band {
+	case constants.RiskInvalid:
+		return 3
+	case constants.RiskElevated:
+		return 2
+	case constants.RiskCaution:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func flagCodeSet(flags []RiskFlag) map[string]struct{} {
+	codes := make(map[string]struct{}, len(flags))
+	for _, flag := range flags {
+		codes[flag.Code] = struct{}{}
+	}
+	return codes
 }

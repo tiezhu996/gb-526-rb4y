@@ -86,6 +86,45 @@ func (r *DecompressionAssessmentRepository) CreateModeled(ctx context.Context, p
 	return nil
 }
 
+func (r *DecompressionAssessmentRepository) CreateSensitivityCheck(ctx context.Context, item *model.SensitivityCheck, entry audit.Entry) error {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(item).Error; err != nil {
+			return fmt.Errorf("create sensitivity check: %w", err)
+		}
+		entry.EntityType = "sensitivity_check"
+		entry.EntityID = item.ID
+		if err := r.audit.RecordWithDB(ctx, tx, entry); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("create sensitivity check transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *DecompressionAssessmentRepository) ListSensitivityChecks(ctx context.Context, assessmentID uint, page, size int) ([]model.SensitivityCheck, int64, error) {
+	query := r.db.WithContext(ctx).Model(&model.SensitivityCheck{}).Where("assessment_id = ?", assessmentID)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count sensitivity checks: %w", err)
+	}
+	var items []model.SensitivityCheck
+	if err := query.Order("created_at DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&items).Error; err != nil {
+		return nil, 0, fmt.Errorf("list sensitivity checks: %w", err)
+	}
+	return items, total, nil
+}
+
+func (r *DecompressionAssessmentRepository) GetSensitivityCheck(ctx context.Context, id uint) (model.SensitivityCheck, error) {
+	var item model.SensitivityCheck
+	if err := r.db.WithContext(ctx).First(&item, id).Error; err != nil {
+		return model.SensitivityCheck{}, fmt.Errorf("get sensitivity check %d: %w", id, err)
+	}
+	return item, nil
+}
+
 func (r *DecompressionAssessmentRepository) Transition(ctx context.Context, plan model.DivePlan, assessment model.DecompressionAssessment, target constants.PlanStatus, actorID uint, entry audit.Entry) error {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		planChanges := map[string]any{"plan_status": target, "version": gorm.Expr("version + 1")}

@@ -128,3 +128,43 @@ func (h *DecompressionAssessmentHandler) Compare(c *gin.Context) {
 	}
 	util.OK(c, comparison)
 }
+
+func (h *DecompressionAssessmentHandler) RunSensitivityCheck(c *gin.Context) {
+	assessmentID, ok := util.ParamID(c)
+	if !ok {
+		return
+	}
+	item, err := h.service.CreateSensitivityCheck(c.Request.Context(), assessmentID, auditActor(c))
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.Created(c, item)
+}
+
+func (h *DecompressionAssessmentHandler) ListSensitivityChecks(c *gin.Context) {
+	assessmentID, ok := util.ParamID(c)
+	if !ok {
+		return
+	}
+	page, size := util.QueryPage(c)
+	items, total, err := h.service.ListSensitivityChecks(c.Request.Context(), assessmentID, page, size)
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.OK(c, util.Page{Items: items, Total: total, Page: page, Size: size})
+}
+
+func (h *DecompressionAssessmentHandler) GetSensitivityCheck(c *gin.Context) {
+	id, ok := util.ParamID(c)
+	if !ok {
+		return
+	}
+	item, err := h.service.GetSensitivityCheck(c.Request.Context(), id)
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.OK(c, item)
+}

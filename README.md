@@ -37,6 +37,7 @@ docker compose down -v --remove-orphans
 - `DivePlan`：工作地点表面压力、呼吸气体、计划时间、输入版本和完整状态流。
 - `ExposureSegment`：同一计划内唯一且连续的序号，严格校验深度、时长、上升速率、气体比例和段间连续性。
 - `DecompressionAssessment`：不可覆盖的输入快照、六舱负荷曲线、风险证据、比较指数、算法版本和假设。
+- `SensitivityCheck`：对某次评估的不可变快照做逐段 ±10% 深度/时长扰动重算，独立留档，不改动原评估。
 - 五个业务页：训练档案、计划编排、暴露剖面、评估复核、审计轨迹；图表只消费真实 API 数据。
 - JWT/RBAC、请求 ID、结构化访问日志、panic recovery、本地限流、统一错误码、事务、乐观锁和不可普通删除的审计事件。
 
@@ -53,6 +54,15 @@ docker compose down -v --remove-orphans
 5. 输出每段环境压力、N2/He 分压、每舱负荷、相对基线变化、输入快照、假设和风险标记。
 
 比较指数只用于对照同一模型下的方案差异，**不是安全评分**。风险阈值是项目内的复核提示，不代表医学、法规或行业认证结论。
+
+## 敏感性检查
+
+评估复核页支持对任意一次不可变评估做敏感性检查，回应“输入稍有偏差结论就翻转”的复核担忧：
+
+1. 计划员点击一次，系统读取该评估封存的输入快照，逐段把深度或时长分别 ±10%（其余输入固定），用同一算法版本确定性重算，共 `段数 × 4` 个组合。
+2. 每个组合记录比较指数变化和风险带变化；越出模型输入边界的组合记为“无法计算”并保留原因，其余组合照常出结果。
+3. 按比较指数绝对变化标出影响最大的段及其驱动组合；若所有组合指数均不变，则如实标为“指数稳定”，不强行指认。
+4. 每次检查独立留档（含基线、全部组合结果、操作者、时间），不改动原评估快照与方案状态；主管与管理员可查看留档，创建权限沿用计划员/管理员写权限，审计事件沿用现有不可删除轨迹。
 
 ## 状态与枚举位置
 
@@ -90,6 +100,9 @@ draft -> modeled -> pending_supervisor_review -> approved_for_training -> archiv
 | `POST` | `/api/v1/plans/:id/assessments/run` | 校验并创建不可覆盖评估 |
 | `GET` | `/api/v1/assessments`、`/assessments/:id` | 结果列表与重放数据 |
 | `GET` | `/api/v1/assessments/:id/compare?other_id=` | 比较两个不可覆盖结果 |
+| `POST` | `/api/v1/assessments/:id/sensitivity-checks` | 计划员对快照做 ±10% 敏感性检查并留档 |
+| `GET` | `/api/v1/assessments/:id/sensitivity-checks` | 查看某评估的全部敏感性检查留档 |
+| `GET` | `/api/v1/sensitivity-checks/:id` | 读取单条敏感性检查留档 |
 | `POST` | `/api/v1/assessments/:id/submit` | 计划员提交主管复核 |
 | `POST` | `/api/v1/assessments/:id/approve` | 主管人工批准训练用途 |
 | `GET` | `/api/v1/audit-events` | 主管/管理员读取不可删除审计轨迹 |

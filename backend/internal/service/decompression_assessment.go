@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"commercial-diving-decompression-control/backend/internal/audit"
 	"commercial-diving-decompression-control/backend/internal/constants"
@@ -151,4 +153,87 @@ func (s *DecompressionAssessmentService) Compare(ctx context.Context, leftID, ri
 			"Differences describe deterministic training assumptions, not relative dive safety.",
 		}, Disclaimer: dto.SafetyDisclaimer,
 	}, nil
+}
+
+// CreateSensitivityCheck replays the immutable snapshot of one assessment with
+// per-segment +/-10% depth/duration nudges and archives the result as an
+// independent, append-only sensitivity check. Neither the assessment nor the
+// plan is modified; out-of-range variants are recorded as non-computable.
+func (s *DecompressionAssessmentService) CreateSensitivityCheck(ctx context.Context, assessmentID uint, actor audit.Entry) (dto.SensitivityCheckResponse, error) {
+	assessment, err := s.assessments.Get(ctx, assessmentID)
+	if err != nil {
+		return dto.SensitivityCheckResponse{}, err
+	}
+	snapshot, err := decodeInputSnapshot(assessment.InputSnapshotJSON)
+	if err != nil {
+		return dto.SensitivityCheckResponse{}, util.Internal(err)
+	}
+	report, err := decompression.RunSensitivity(snapshot, s.maxSegments)
+	if err != nil {
+		return dto.SensitivityCheckResponse{}, util.Unprocessable("MODEL_INPUT_INVALID", err.Error(), err)
+	}
+	reportJSON, err := json.Marshal(report)
+	if err != nil {
+		return dto.SensitivityCheckResponse{}, util.Internal(fmt.Errorf("marshal sensitivity report: %w", err))
+	}
+	item := model.SensitivityCheck{
+		AssessmentID: assessment.ID, PlanID: assessment.PlanID,
+		AlgorithmVersion: assessment.AlgorithmVersion, AdjustmentRatio: report.AdjustmentRatio,
+		BaselineScore: report.BaselineScore, BaselineRiskBand: report.BaselineRiskBand,
+		TotalVariants: report.TotalVariants, ComputableVariants: report.ComputableVariants,
+		OutOfRangeVariants:     report.OutOfRangeVariants,
+		MostAffectedSequenceNo: report.MostAffectedSequenceNo,
+		MostAffectedAxis:       string(report.MostAffectedAxis),
+		MostAffectedDirection:  string(report.MostAffectedDirection),
+		ReportJSON:             string(reportJSON),
+		CreatedBy:              actor.ActorID, CreatedByUsername: actor.ActorUsername,
+		CreatedAt: time.Now().UTC(),
+	}
+	actor.Action = "sensitivity_check.run"
+	actor.EntityType = "sensitivity_check"
+	actor.BeforeSummary = fmt.Sprintf("assessment=%d immutable_snapshot=true baseline_score=%.2f baseline_band=%s", assessment.ID, report.BaselineScore, report.BaselineRiskBand)
+	mostAffected := "none_index_stable"
+	if report.MostAffectedSequenceNo > 0 {
+		mostAffected = fmt.Sprintf("segment_%d_%s_%s", report.MostAffectedSequenceNo, report.MostAffectedAxis, report.MostAffectedDirection)
+	}
+	actor.AfterSummary = fmt.Sprintf("variants=%d computable=%d out_of_range=%d most_affected=%s assessment_unchanged=true snapshot_preserved=true", report.TotalVariants, report.ComputableVariants, report.OutOfRangeVariants, mostAffected)
+	if err := s.assessments.CreateSensitivityCheck(ctx, &item, actor); err != nil {
+		return dto.SensitivityCheckResponse{}, err
+	}
+	return dto.DecodeSensitivityCheck(item)
+}
+
+func (s *DecompressionAssessmentService) ListSensitivityChecks(ctx context.Context, assessmentID uint, page, size int) ([]dto.SensitivityCheckResponse, int64, error) {
+	if _, err := s.assessments.Get(ctx, assessmentID); err != nil {
+		return nil, 0, err
+	}
+	items, total, err := s.assessments.ListSensitivityChecks(ctx, assessmentID, page, size)
+	if err != nil {
+		return nil, 0, err
+	}
+	responses := make([]dto.SensitivityCheckResponse, 0, len(items))
+	for _, item := range items {
+		response, decodeErr := dto.DecodeSensitivityCheck(item)
+		if decodeErr != nil {
+			return nil, 0, decodeErr
+		}
+		responses = append(responses, response)
+	}
+	return responses, total, nil
+}
+
+func (s *DecompressionAssessmentService) GetSensitivityCheck(ctx context.Context, id uint) (dto.SensitivityCheckResponse, error) {
+	item, err := s.assessments.GetSensitivityCheck(ctx, id)
+	if err != nil {
+		return dto.SensitivityCheckResponse{}, err
+	}
+	return dto.DecodeSensitivityCheck(item)
+}
+
+func decodeInputSnapshot(raw string) (decompression.InputSnapshot, error) {
+	var snapshot decompression.InputSnapshot
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+		return decompression.InputSnapshot{}, fmt.Errorf("decode assessment input snapshot for sensitivity replay: %w", err)
+	}
+	return snapshot, nil
 }

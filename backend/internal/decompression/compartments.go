@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 
+	"commercial-diving-decompression-control/backend/internal/constants"
 	"commercial-diving-decompression-control/backend/internal/model"
 )
 
@@ -165,4 +166,232 @@ func MarshalResult(result Result) (snapshot, curves, flags, assumptions string, 
 		encoded[index] = string(data)
 	}
 	return encoded[0], encoded[1], encoded[2], encoded[3], nil
+}
+
+// Sensitivity inputs are fixed at a symmetrical ten-percent nudge; planners can
+// only ask the engine to re-run the preserved snapshot, never to edit it.
+const SensitivityAdjustmentRatio = 0.1
+
+type SensitivityAxis string
+
+const (
+	SensitivityAxisDepth    SensitivityAxis = "depth"
+	SensitivityAxisDuration SensitivityAxis = "duration"
+)
+
+type SensitivityDirection string
+
+const (
+	SensitivityDirectionDecrease SensitivityDirection = "decrease"
+	SensitivityDirectionIncrease SensitivityDirection = "increase"
+)
+
+type SensitivityVariant struct {
+	SequenceNo       int                  `json:"sequence_no"`
+	Axis             SensitivityAxis      `json:"axis"`
+	Direction        SensitivityDirection `json:"direction"`
+	AdjustmentRatio  float64              `json:"adjustment_ratio"`
+	OriginalDepthM   float64              `json:"original_depth_m"`
+	AdjustedDepthM   float64              `json:"adjusted_depth_m"`
+	OriginalDuration float64              `json:"original_duration_min"`
+	AdjustedDuration float64              `json:"adjusted_duration_min"`
+	Computable       bool                 `json:"computable"`
+	OutOfRangeReason string               `json:"out_of_range_reason"`
+	ComparativeScore float64              `json:"comparative_score"`
+	ScoreDelta       float64              `json:"score_delta"`
+	RiskBand         constants.RiskBand   `json:"risk_band"`
+	BandRankDelta    int                  `json:"band_rank_delta"`
+	AddedRiskFlags   []string             `json:"added_risk_flags"`
+	RemovedRiskFlags []string             `json:"removed_risk_flags"`
+}
+
+type SegmentSensitivityImpact struct {
+	SequenceNo            int                  `json:"sequence_no"`
+	SegmentType           string               `json:"segment_type"`
+	DepthM                float64              `json:"depth_m"`
+	DurationMin           float64              `json:"duration_min"`
+	ComputableCount       int                  `json:"computable_count"`
+	OutOfRangeCount       int                  `json:"out_of_range_count"`
+	MaxAbsoluteScoreDelta float64              `json:"max_absolute_score_delta"`
+	MaxBandRankDelta      int                  `json:"max_band_rank_delta"`
+	DriverAxis            SensitivityAxis      `json:"driver_axis"`
+	DriverDirection       SensitivityDirection `json:"driver_direction"`
+	Variants              []SensitivityVariant `json:"variants"`
+}
+
+type SensitivityReport struct {
+	AlgorithmVersion       string                     `json:"algorithm_version"`
+	AdjustmentRatio        float64                    `json:"adjustment_ratio"`
+	BaselineScore          float64                    `json:"baseline_comparative_score"`
+	BaselineRiskBand       constants.RiskBand         `json:"baseline_risk_band"`
+	TotalVariants          int                        `json:"total_variants"`
+	ComputableVariants     int                        `json:"computable_variants"`
+	OutOfRangeVariants     int                        `json:"out_of_range_variants"`
+	MostAffectedSequenceNo int                        `json:"most_affected_sequence_no"`
+	MostAffectedAxis       SensitivityAxis            `json:"most_affected_axis"`
+	MostAffectedDirection  SensitivityDirection       `json:"most_affected_direction"`
+	SegmentImpacts         []SegmentSensitivityImpact `json:"segment_impacts"`
+	Disclaimer             string                     `json:"disclaimer"`
+}
+
+type sensitivityPerturbation struct {
+	axis      SensitivityAxis
+	direction SensitivityDirection
+}
+
+var sensitivityPerturbations = []sensitivityPerturbation{
+	{axis: SensitivityAxisDepth, direction: SensitivityDirectionDecrease},
+	{axis: SensitivityAxisDepth, direction: SensitivityDirectionIncrease},
+	{axis: SensitivityAxisDuration, direction: SensitivityDirectionDecrease},
+	{axis: SensitivityAxisDuration, direction: SensitivityDirectionIncrease},
+}
+
+// RunSensitivity replays an immutable snapshot and re-runs the model once per
+// segment for each +/-10% depth/duration perturbation. The original snapshot,
+// plan and live segments are never modified; a perturbation that fails model
+// input validation is archived as a non-computable variant, not as a run error.
+func RunSensitivity(snapshot InputSnapshot, maxSegments int) (SensitivityReport, error) {
+	plan := snapshot.Plan
+	diver := snapshot.Diver
+	segments := append([]model.ExposureSegment(nil), snapshot.Segments...)
+	baseline, err := Run(plan, diver, segments, snapshot.AlgorithmVersion, maxSegments)
+	if err != nil {
+		return SensitivityReport{}, fmt.Errorf("replay sensitivity baseline: %w", err)
+	}
+	baselineFlags := flagCodeSet(baseline.RiskFlags)
+	baselineBand := HighestRiskBand(baseline.RiskFlags)
+	report := SensitivityReport{
+		AlgorithmVersion: snapshot.AlgorithmVersion,
+		AdjustmentRatio:  SensitivityAdjustmentRatio,
+		BaselineScore:    baseline.ComparativeScore,
+		BaselineRiskBand: baselineBand,
+		Disclaimer:       "Sensitivity nudges are archived training comparisons of the immutable snapshot; they do not change the assessment and are not executable decompression guidance.",
+	}
+	for _, segment := range segments {
+		impact := SegmentSensitivityImpact{
+			SequenceNo: segment.SequenceNo, SegmentType: segment.SegmentType,
+			DepthM: round2(segment.DepthM), DurationMin: round2(segment.DurationMin),
+			Variants: make([]SensitivityVariant, 0, len(sensitivityPerturbations)),
+		}
+		for _, perturbation := range sensitivityPerturbations {
+			variant := SensitivityVariant{
+				SequenceNo:       segment.SequenceNo,
+				Axis:             perturbation.axis,
+				Direction:        perturbation.direction,
+				AdjustmentRatio:  SensitivityAdjustmentRatio,
+				OriginalDepthM:   round2(segment.DepthM),
+				AdjustedDepthM:   round2(segment.DepthM),
+				OriginalDuration: round2(segment.DurationMin),
+				AdjustedDuration: round2(segment.DurationMin),
+				AddedRiskFlags:   []string{},
+				RemovedRiskFlags: []string{},
+			}
+			candidate := segment
+			factor := 1 + SensitivityAdjustmentRatio
+			if perturbation.direction == SensitivityDirectionDecrease {
+				factor = 1 - SensitivityAdjustmentRatio
+			}
+			if perturbation.axis == SensitivityAxisDepth {
+				candidate.DepthM = round4(segment.DepthM * factor)
+				variant.AdjustedDepthM = round2(candidate.DepthM)
+			} else {
+				candidate.DurationMin = round4(segment.DurationMin * factor)
+				variant.AdjustedDuration = round2(candidate.DurationMin)
+			}
+			perturbed := append(append([]model.ExposureSegment(nil), segments[:segment.SequenceNo-1]...), candidate)
+			perturbed = append(perturbed, segments[segment.SequenceNo:]...)
+			result, runErr := Run(plan, diver, perturbed, snapshot.AlgorithmVersion, maxSegments)
+			report.TotalVariants++
+			if runErr != nil {
+				variant.Computable = false
+				variant.OutOfRangeReason = runErr.Error()
+				impact.OutOfRangeCount++
+				report.OutOfRangeVariants++
+				impact.Variants = append(impact.Variants, variant)
+				continue
+			}
+			variant.Computable = true
+			variant.ComparativeScore = result.ComparativeScore
+			variant.ScoreDelta = round2(result.ComparativeScore - baseline.ComparativeScore)
+			variant.RiskBand = HighestRiskBand(result.RiskFlags)
+			variant.BandRankDelta = RiskBandRank(variant.RiskBand) - RiskBandRank(baselineBand)
+			variant.AddedRiskFlags, variant.RemovedRiskFlags = diffRiskFlags(baselineFlags, flagCodeSet(result.RiskFlags))
+			impact.ComputableCount++
+			report.ComputableVariants++
+			if absScore := math.Abs(variant.ScoreDelta); absScore > impact.MaxAbsoluteScoreDelta {
+				impact.MaxAbsoluteScoreDelta = absScore
+			}
+			if variant.BandRankDelta > impact.MaxBandRankDelta {
+				impact.MaxBandRankDelta = variant.BandRankDelta
+			}
+			impact.Variants = append(impact.Variants, variant)
+		}
+		report.SegmentImpacts = append(report.SegmentImpacts, impact)
+	}
+	selectMostAffectedSegment(&report)
+	return report, nil
+}
+
+func diffRiskFlags(baseline, variant map[string]struct{}) (added, removed []string) {
+	added, removed = []string{}, []string{}
+	for code := range variant {
+		if _, exists := baseline[code]; !exists {
+			added = append(added, code)
+		}
+	}
+	for code := range baseline {
+		if _, exists := variant[code]; !exists {
+			removed = append(removed, code)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	return added, removed
+}
+
+// selectMostAffectedSegment ranks segments by absolute comparative-index change
+// and, as deterministic tie-breakers, by upward risk-band movement then the
+// earliest segment and perturbation order.
+func selectMostAffectedSegment(report *SensitivityReport) {
+	bestIndex := -1
+	for index, impact := range report.SegmentImpacts {
+		if impact.ComputableCount == 0 {
+			continue
+		}
+		if bestIndex == -1 {
+			bestIndex = index
+			continue
+		}
+		best := report.SegmentImpacts[bestIndex]
+		if impact.MaxAbsoluteScoreDelta < best.MaxAbsoluteScoreDelta {
+			continue
+		}
+		if impact.MaxAbsoluteScoreDelta == best.MaxAbsoluteScoreDelta && impact.MaxBandRankDelta <= best.MaxBandRankDelta {
+			continue
+		}
+		bestIndex = index
+	}
+	if bestIndex < 0 {
+		return
+	}
+	impact := &report.SegmentImpacts[bestIndex]
+	// When no computable perturbation moves the comparative index, the honest
+	// answer to a robustness question is "no segment stands out"; marking an
+	// arbitrary segment would mislead the reviewing supervisor.
+	if impact.MaxAbsoluteScoreDelta == 0 {
+		return
+	}
+	for _, variant := range impact.Variants {
+		if !variant.Computable {
+			continue
+		}
+		if math.Abs(variant.ScoreDelta) == impact.MaxAbsoluteScoreDelta {
+			impact.DriverAxis = variant.Axis
+			impact.DriverDirection = variant.Direction
+			report.MostAffectedSequenceNo = impact.SequenceNo
+			report.MostAffectedAxis = variant.Axis
+			report.MostAffectedDirection = variant.Direction
+			return
+		}
+	}
 }
